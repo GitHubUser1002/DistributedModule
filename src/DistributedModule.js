@@ -33,7 +33,7 @@ DistributedModule.prototype.mqueue = function (key, array, callback) {
 };
 
 DistributedModule.prototype.queue = function (key, value, callback) {
-	this.redisclient.rpush(key, value, function(errors, results) {
+	this.redisclient.rpush(key, value, function(error, results) {
 		if (callback) callback(error, results);
 	});
 	
@@ -41,14 +41,17 @@ DistributedModule.prototype.queue = function (key, value, callback) {
 }
 
 DistributedModule.prototype.dequeue = function dequeue(key, callback) {
-	this.redisclient.lpop(key, function(errors, result) {
+	var redisclient = this.redisclient;
+	var pubsubclient = this.pubsubclient;
+	
+	redisclient.lpop(key, function(errors, result) {		
 		if (result) callback(result);
 		else {
-			this.pubsubclient.subscribe('queue'+key, function(msg){
-				this.redisclient.lpop(key, function(errors, result) {
+			pubsubclient.subscribe('queue'+key, function(msg){
+				redisclient.lpop(key, function(errors, result) {
 					if (result)  {
 						callback(result);
-						this.pubsubclient.unsubscribe('queue'+key);
+						pubsubclient.unsubscribe('queue'+key);
 					}
 				});
 			});
@@ -64,19 +67,23 @@ DistributedModule.prototype.bDequeue = function bDequeue(key, callback, timeout)
 }
 */
 DistributedModule.prototype.enterBarrier = function enterBarrier(key, size, callback) {
+	var redisclient = this.redisclient;
+	var pubsubclient = this.pubsubclient;
+	var id = this.id;
+	
 	this.redlock.lock('barrier'+key, 1000).then(function(lock) {
-		this.redisclient.incr(key);
-		this.redisclient.get(key, function(err, value) {
+		redisclient.incr(key);
+		redisclient.get(key, function(err, value) {
 
 			if (callback) {
-				this.pubsubclient.subscribe('enterBarrier'+key, function(msg){
-					if (message.content.size === size) {
-						this.pubsubclient.unsubscribe('enterBarrier'+key);
+				pubsubclient.subscribe('enterBarrier'+key, function(msg){
+					if (Number(msg.content.size) >= size) {
+						pubsubclient.unsubscribe('enterBarrier'+key);
 						callback();
 					}
 				});
 				
-				this.pubsubclient.publish('enterBarrier'+key, this.id, {
+				pubsubclient.publish('enterBarrier'+key, id, {
 					size : value
 				});
 			}
@@ -87,18 +94,22 @@ DistributedModule.prototype.enterBarrier = function enterBarrier(key, size, call
 }
 
 DistributedModule.prototype.leaveBarrier = function leaveBarrier(key, callback) {
+	var redisclient = this.redisclient;
+	var pubsubclient = this.pubsubclient;
+	var id = this.id;
+	
 	this.redlock.lock('barrier'+key, 1000).then(function(lock) {
-		this.redisclient.decr(key);
-		this.redisclient.get(key, function(err, value) {
+		redisclient.decr(key);
+		redisclient.get(key, function(err, value) {
 			if (callback) {
-				this.pubsubclient.subscribe('leaveBarrier'+key, function(msg){
-					if (message.content.size === 0) {
-						this.pubsubclient.unsubscribe('leaveBarrier'+key);
+				pubsubclient.subscribe('leaveBarrier'+key, function(msg){
+					if (Number(msg.content.size) === 0) {
+						pubsubclient.unsubscribe('leaveBarrier'+key);
 						callback();
 					}
 				});
 				
-				this.pubsubclient.publish('leaveBarrier'+key, this.id, {
+				pubsubclient.publish('leaveBarrier'+key, this.id, {
 					size : value
 				});
 			}
@@ -329,7 +340,8 @@ DistributedModule.prototype.startTransaction = function (key, onComplete) {
 					state = 'waiting for ack'
 				}
 				
-			} else (state === 'waiting for ack' && msgType === 'acknowledgement') {
+			} else (state === 'waiting for ack' && msgType === 'acknowledgement') 
+			{
 				cohorts[id]['acknowledged'] = true;
 				
 				var allAck = true;
